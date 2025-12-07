@@ -100,7 +100,9 @@ func NewClient(ctx context.Context, clientID, clientSecret, refreshToken, develo
 // FetchLeads gets recent leads for an account
 func (c *Client) FetchLeads(ctx context.Context, accountID string, maxLeads int) ([]Lead, error) {
 	// Build the API URL
-	url := fmt.Sprintf("https://googleads.googleapis.com/v18/customers/%s/googleAds:searchStream", accountID)
+
+	url := fmt.Sprintf("https://googleads.googleapis.com/v22/customers/%s/googleAds:searchStream", accountID)
+	print("FETCHING LEADS")
 
 	// Build the GAQL query
 	query := fmt.Sprintf(`
@@ -145,7 +147,8 @@ func (c *Client) FetchLeads(ctx context.Context, accountID string, maxLeads int)
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute request: %w", err)
 	}
-	defer resp.Body.Close()
+
+	defer func() { _ = resp.Body.Close() }()
 
 	// Check status code
 	if resp.StatusCode != http.StatusOK {

@@ -3,7 +3,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log"
 
 	"github.com/benjamin-argo/lsa-poller/internal/config"
@@ -24,38 +23,69 @@ func main() {
 		log.Fatalf("Failed to load config: %v", err)
 	}
 
+	log.Printf("Config loaded successfully")
+
 	ctx := context.Background()
 
-	oauthConfig := &oauth2.Config{
+	// === GOOGLE SHEETS AUTH ===
+	sheetsOAuthConfig := &oauth2.Config{
 		ClientID:     cfg.ClientID,
 		ClientSecret: cfg.ClientSecret,
 		Endpoint:     google.Endpoint,
 		Scopes:       []string{sheets.SpreadsheetsScope},
 	}
 
-	token := &oauth2.Token{
-		RefreshToken: cfg.RefreshToken,
+	sheetsToken := &oauth2.Token{
+		RefreshToken: cfg.SheetsRefreshToken, // ← Sheets token
 	}
 
-	httpClient := oauthConfig.Client(ctx, token)
-
-	sheetsService, err := sheets.NewService(ctx, option.WithHTTPClient(httpClient))
+	sheetsHTTPClient := sheetsOAuthConfig.Client(ctx, sheetsToken)
+	sheetsService, err := sheets.NewService(ctx, option.WithHTTPClient(sheetsHTTPClient))
 	if err != nil {
 		log.Fatalf("Failed to create sheets service: %v", err)
 	}
 
-	// Read the spreadsheet
+	// Read spreadsheet
 	resp, err := sheetsService.Spreadsheets.Values.Get(cfg.SheetID, "Sheet1!A:G").Do()
 	if err != nil {
 		log.Fatalf("Failed to read: %v", err)
 	}
 
-	clients := gsheets.ParseClients(resp.Values)
+	log.Printf("Got %d rows", len(resp.Values))
 
-	googleadsClient, err := googleads.NewClient(ctx, cfg.ClientID, cfg.ClientSecret, cfg.RefreshToken, cfg.GoogleAdsDeveloperToken, cfg.GoogleAdsManagerID)
+	// Parse clients
+	clients := gsheets.ParseClients(resp.Values)
+	log.Printf("Found %d clients", len(clients))
+
+	// === GOOGLE ADS CLIENT ===
+	googleadsClient, err := googleads.NewClient(
+		ctx,
+		cfg.ClientID,
+		cfg.ClientSecret,
+		cfg.GoogleAdsRefreshToken, // ← Google Ads token
+		cfg.GoogleAdsDeveloperToken,
+		cfg.GoogleAdsManagerID,
+	)
 	if err != nil {
+		log.Fatalf("Failed to create Google Ads client: %v", err)
+	}
+	if len(clients) > 0 {
+		log.Printf("Attempting to fetch leads for account: %s (%s)", clients[0].AccountName, clients[0].AccountID)
+	}
+
+	// Fetch leads for first client
+	if len(clients) > 0 {
 		leads, err := googleadsClient.FetchLeads(ctx, clients[0].AccountID, 10)
-		fmt.Println(err)
-		fmt.Println(leads)
+		if err != nil {
+			log.Fatalf("Failed to fetch leads: %v", err)
+		}
+
+		log.Printf("Got %d leads for %s", len(leads), clients[0].AccountName)
+		for _, lead := range leads {
+			log.Printf("  Lead ID: %s, Type: %s, Status: %s",
+				lead.ID,
+				lead.GetLeadTypeName(),
+				lead.GetLeadStatusName())
+		}
 	}
 }

@@ -1,4 +1,4 @@
-// Package sheets
+// Package gsheets
 package gsheets
 
 type Client struct {

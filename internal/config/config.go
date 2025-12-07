@@ -1,4 +1,4 @@
-// Package config
+// Package config handles application configuration from environment variables
 package config
 
 import (
@@ -7,24 +7,36 @@ import (
 )
 
 type ProjectConfig struct {
-	RefreshToken            string
-	SheetID                 string
-	SheetName               string
-	ClientSecret            string
-	ClientID                string
-	GoogleAdsManagerID      string
+	// Shared OAuth credentials
+	ClientID     string
+	ClientSecret string
+
+	// Google Sheets
+	SheetsRefreshToken string
+	SheetID            string
+	SheetName          string
+
+	// Google Ads
+	GoogleAdsRefreshToken   string
 	GoogleAdsDeveloperToken string
+	GoogleAdsManagerID      string
 }
 
 func Load() (*ProjectConfig, error) {
 	cfg := &ProjectConfig{
-		RefreshToken:            os.Getenv("GOOGLE_SHEETS_REFRESH_TOKEN"),
-		ClientSecret:            os.Getenv("GOOGLE_CLIENT_SECRET"),
-		ClientID:                os.Getenv("GOOGLE_CLIENT_ID"),
-		SheetID:                 os.Getenv("SHEET_ID"),
-		SheetName:               os.Getenv("SHEET_NAME"),
-		GoogleAdsManagerID:      os.Getenv("GOOGLE_ADS_MANAGER_ID"),
+		// Shared
+		ClientID:     os.Getenv("GOOGLE_CLIENT_ID"),
+		ClientSecret: os.Getenv("GOOGLE_CLIENT_SECRET"),
+
+		// Sheets
+		SheetsRefreshToken: os.Getenv("GOOGLE_SHEETS_REFRESH_TOKEN"),
+		SheetID:            os.Getenv("SHEET_ID"),
+		SheetName:          os.Getenv("SHEET_NAME"),
+
+		// Google Ads
+		GoogleAdsRefreshToken:   os.Getenv("GOOGLE_ADS_REFRESH_TOKEN"),
 		GoogleAdsDeveloperToken: os.Getenv("GOOGLE_ADS_DEVELOPER_TOKEN"),
+		GoogleAdsManagerID:      os.Getenv("GOOGLE_ADS_MANAGER_ACCOUNT_ID"),
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -36,11 +48,14 @@ func Load() (*ProjectConfig, error) {
 
 func (c *ProjectConfig) Validate() error {
 	checks := map[string]string{
-		c.RefreshToken: "GOOGLE_SHEETS_REFRESH_TOKEN",
-		c.SheetID:      "SHEET_ID",
-		c.SheetName:    "SHEET_NAME",
-		c.ClientSecret: "GOOGLE_CLIENT_SECRET",
-		c.ClientID:     "GOOGLE_CLIENT_ID",
+		c.ClientID:                "GOOGLE_CLIENT_ID",
+		c.ClientSecret:            "GOOGLE_CLIENT_SECRET",
+		c.SheetsRefreshToken:      "GOOGLE_SHEETS_REFRESH_TOKEN",
+		c.SheetID:                 "SHEET_ID",
+		c.SheetName:               "SHEET_NAME",
+		c.GoogleAdsRefreshToken:   "GOOGLE_ADS_REFRESH_TOKEN",
+		c.GoogleAdsDeveloperToken: "GOOGLE_ADS_DEVELOPER_TOKEN",
+		c.GoogleAdsManagerID:      "GOOGLE_ADS_MANAGER_ACCOUNT_ID",
 	}
 
 	for value, name := range checks {
@@ -48,5 +63,6 @@ func (c *ProjectConfig) Validate() error {
 			return fmt.Errorf("%s is required", name)
 		}
 	}
+
 	return nil
 }
