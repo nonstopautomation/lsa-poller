@@ -3,21 +3,61 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/benjamin-argo/lsa-poller/internal/config"
 	"github.com/benjamin-argo/lsa-poller/internal/googleads"
 	"github.com/benjamin-argo/lsa-poller/internal/gsheets"
+	"github.com/benjamin-argo/lsa-poller/internal/webhook"
 	"github.com/joho/godotenv"
-	"golang.org/x/oauth2"
-	"golang.org/x/oauth2/google"
-	"google.golang.org/api/option"
-	"google.golang.org/api/sheets/v4"
 )
 
-func main() {
-	_ = godotenv.Load()
+func processLeads(client gsheets.Client, leads []googleads.Lead) {
+	for _, lead := range leads {
+		if err := webhook.SendLead(client.WebhookURL, lead); err != nil {
+			log.Printf("Failed to send lead %s for client %s: %v",
+				lead.ID, client.AccountName, err)
+			continue
+		}
+		log.Printf("Sent lead %s for client %s", lead.ID, client.AccountName)
+	}
+}
 
+func processClients(ctx context.Context, clients []gsheets.Client, adsClient *googleads.Client) {
+	for _, client := range clients {
+		// Add this check
+		select {
+		case <-ctx.Done():
+			log.Println("Shutdown requested, stopping client processing")
+			return
+		default:
+		}
+
+		leads, err := adsClient.FetchLeads(ctx, client.AccountID, 100)
+
+		if err != nil {
+			log.Printf("[ERROR] Failed to fetch leads for %s (%s): %v",
+				client.AccountName, client.AccountID, err)
+		} else {
+			if len(leads) > 0 {
+				processLeads(client, leads)
+			} else {
+				log.Printf("[INFO] No new leads for %s", client.AccountName)
+			}
+		}
+
+	}
+
+	log.Printf("Finished processing leads this run for all clients.")
+}
+
+func run() error {
+	_ = godotenv.Load()
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
@@ -27,65 +67,55 @@ func main() {
 
 	ctx := context.Background()
 
-	// === GOOGLE SHEETS AUTH ===
-	sheetsOAuthConfig := &oauth2.Config{
-		ClientID:     cfg.ClientID,
-		ClientSecret: cfg.ClientSecret,
-		Endpoint:     google.Endpoint,
-		Scopes:       []string{sheets.SpreadsheetsScope},
-	}
-
-	sheetsToken := &oauth2.Token{
-		RefreshToken: cfg.SheetsRefreshToken, // ← Sheets token
-	}
-
-	sheetsHTTPClient := sheetsOAuthConfig.Client(ctx, sheetsToken)
-	sheetsService, err := sheets.NewService(ctx, option.WithHTTPClient(sheetsHTTPClient))
+	clients, err := gsheets.FetchClients(ctx, cfg)
 	if err != nil {
-		log.Fatalf("Failed to create sheets service: %v", err)
+		return fmt.Errorf("error fetching clients from spreadsheet: %w", err)
 	}
 
-	// Read spreadsheet
-	resp, err := sheetsService.Spreadsheets.Values.Get(cfg.SheetID, "Sheet1!A:G").Do()
+	adsClient, err := googleads.NewClient(ctx, cfg)
 	if err != nil {
-		log.Fatalf("Failed to read: %v", err)
+		return fmt.Errorf("error authenticating to googleads clients %w", err)
 	}
 
-	log.Printf("Got %d rows", len(resp.Values))
+	return runPoller(clients, adsClient)
+}
 
-	// Parse clients
-	clients := gsheets.ParseClients(resp.Values)
-	log.Printf("Found %d clients", len(clients))
+func runPoller(clients []gsheets.Client, adsClient *googleads.Client) error {
+	pollerCtx, cancel := context.WithCancel(context.Background())
 
-	// === GOOGLE ADS CLIENT ===
-	googleadsClient, err := googleads.NewClient(
-		ctx,
-		cfg.ClientID,
-		cfg.ClientSecret,
-		cfg.GoogleAdsRefreshToken, // ← Google Ads token
-		cfg.GoogleAdsDeveloperToken,
-		cfg.GoogleAdsManagerID,
-	)
-	if err != nil {
-		log.Fatalf("Failed to create Google Ads client: %v", err)
-	}
-	if len(clients) > 0 {
-		log.Printf("Attempting to fetch leads for account: %s (%s)", clients[0].AccountName, clients[0].AccountID)
-	}
+	defer cancel()
 
-	// Fetch leads for first client
-	if len(clients) > 0 {
-		leads, err := googleadsClient.FetchLeads(ctx, clients[0].AccountID, 10)
-		if err != nil {
-			log.Fatalf("Failed to fetch leads: %v", err)
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+
+	go func() {
+		sig := <-sigChan
+		log.Printf("Received signal: %v", sig)
+		cancel() // Cancels pollerCtx
+	}()
+
+	ticker := time.NewTicker(1 * time.Hour)
+	defer ticker.Stop()
+
+	log.Println("Starting initial poll...")
+	processClients(pollerCtx, clients, adsClient) // Use pollerCtx
+
+	for {
+		select {
+		case t := <-ticker.C:
+			log.Printf("Proccessing started at %s", t.Format("15:04:05"))
+			processClients(pollerCtx, clients, adsClient)
+
+		case <-pollerCtx.Done():
+			log.Println("Shutdown complete")
+			return nil
 		}
+	}
+}
 
-		log.Printf("Got %d leads for %s", len(leads), clients[0].AccountName)
-		for _, lead := range leads {
-			log.Printf("  Lead ID: %s, Type: %s, Status: %s",
-				lead.ID,
-				lead.GetLeadTypeName(),
-				lead.GetLeadStatusName())
-		}
+func main() {
+	fmt.Println("Starting Polling Process")
+	if err := run(); err != nil {
+		log.Fatalf("Application error: %v", err)
 	}
 }
