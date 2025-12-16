@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/benjamin-argo/lsa-poller/internal/googleads"
+	"github.com/nonstopautomation/lsa-poller/internal/googleads"
 )
 
 func SendLead(webhookURL string, lead googleads.Lead) error {

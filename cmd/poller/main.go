@@ -5,15 +5,17 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
-	"github.com/benjamin-argo/lsa-poller/internal/config"
-	"github.com/benjamin-argo/lsa-poller/internal/googleads"
-	"github.com/benjamin-argo/lsa-poller/internal/gsheets"
-	"github.com/benjamin-argo/lsa-poller/internal/webhook"
+	"github.com/nonstopautomation/lsa-poller/internal/config"
+	"github.com/nonstopautomation/lsa-poller/internal/googleads"
+	"github.com/nonstopautomation/lsa-poller/internal/gsheets"
+	"github.com/nonstopautomation/lsa-poller/internal/webhook"
 	"github.com/joho/godotenv"
 )
 
@@ -56,6 +58,41 @@ func processClients(ctx context.Context, clients []gsheets.Client, adsClient *go
 	log.Printf("Finished processing leads this run for all clients.")
 }
 
+func startHealthServer(port int) *http.Server {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("OK"))
+	})
+
+	server := &http.Server{
+		Addr:    fmt.Sprintf(":%d", port),
+		Handler: mux,
+	}
+
+	go func() {
+		log.Printf("Starting health check server on port %d", port)
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Printf("Health check server error: %v", err)
+		}
+	}()
+
+	return server
+}
+
+func getPort() int {
+	portStr := os.Getenv("PORT")
+	if portStr == "" {
+		return 8080
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		log.Printf("Invalid PORT value '%s', using default 8080", portStr)
+		return 8080
+	}
+	return port
+}
+
 func run() error {
 	_ = godotenv.Load()
 	cfg, err := config.Load()
@@ -77,10 +114,13 @@ func run() error {
 		return fmt.Errorf("error authenticating to googleads clients %w", err)
 	}
 
-	return runPoller(clients, adsClient)
+	port := getPort()
+	healthServer := startHealthServer(port)
+
+	return runPoller(clients, adsClient, healthServer)
 }
 
-func runPoller(clients []gsheets.Client, adsClient *googleads.Client) error {
+func runPoller(clients []gsheets.Client, adsClient *googleads.Client, healthServer *http.Server) error {
 	pollerCtx, cancel := context.WithCancel(context.Background())
 
 	defer cancel()
@@ -92,6 +132,17 @@ func runPoller(clients []gsheets.Client, adsClient *googleads.Client) error {
 		sig := <-sigChan
 		log.Printf("Received signal: %v", sig)
 		cancel() // Cancels pollerCtx
+
+		// Gracefully shutdown health server
+		if healthServer != nil {
+			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer shutdownCancel()
+			if err := healthServer.Shutdown(shutdownCtx); err != nil {
+				log.Printf("Error shutting down health server: %v", err)
+			} else {
+				log.Println("Health server shut down gracefully")
+			}
+		}
 	}()
 
 	ticker := time.NewTicker(1 * time.Hour)

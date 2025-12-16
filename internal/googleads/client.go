@@ -10,7 +10,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/benjamin-argo/lsa-poller/internal/config"
+	"github.com/nonstopautomation/lsa-poller/internal/config"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 )

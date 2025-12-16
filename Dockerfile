@@ -18,4 +18,6 @@ WORKDIR /root/
 
 COPY --from=builder /app/lsa-poller .
 
+EXPOSE 8080
+
 CMD ["./lsa-poller"]
